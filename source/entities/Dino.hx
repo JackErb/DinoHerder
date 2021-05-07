@@ -20,19 +20,28 @@ class Dino extends Entity
     
     // Constants
     final MAX_FOLLOWING_RADIUS = 150.0;
+    final MAX_PLAYER_FOLLOWING_RADIUS = 30.0;
     final FOLLOWING_RADIUS = 15.0;
-    final DAMPING_FACTOR = 0.7;
+    final DAMPING_FACTOR = 0.8;
     final UNHERDED_SPEED = 30.0;
+
+    final HERDED_HITBOX_ID = 0;
 
     /* State for herded behavior */
     var herdedPlayer:Player;
     var herdedLeader:Entity;
     var herdedSpeed:Float;
 
+    // State for pathfinding
+    var isPathfinding:Bool = false;
+
     var lastPosition:FlxPoint = new FlxPoint();
     var framesStuck:Int = 0;
     var herdedPath:Array<FlxPoint> = new Array<FlxPoint>();
     var framesSincePathGenerated:Int = 0;
+
+    var collisionVector:FlxPoint = new FlxPoint();
+    var collidedWithDino:Int = 0;
 
     public var herdedDisableFollowingRadius = false;
 
@@ -45,8 +54,12 @@ class Dino extends Entity
         super();
 
         setSprite(20, 20, FlxColor.YELLOW);
-        sprite.mass = 0.4; // Make the dino easier to push by player.
+        sprite.mass = 1.0; // Make the dino easier to push by player.
         state = Unherded;
+        
+        var herdedHitbox = new Hitbox(this, HERDED_HITBOX_ID);
+        herdedHitbox.getSprite().makeGraphic(16, 16, FlxColor.BLUE);
+        addHitbox(herdedHitbox);
 
         idleTimer = 0;
     }
@@ -102,6 +115,9 @@ class Dino extends Entity
         }
 
         lastPosition = sprite.getPosition();
+        collidedWithDino = 0;
+        collisionVector.set(0,0);
+        
         super.update(elapsed);
     }
 
@@ -126,11 +142,34 @@ class Dino extends Entity
     {
         herdedSpeed = herdedPlayer.getSpeed();
         var leaderPos = new FlxPoint(herdedLeader.getX(), herdedLeader.getY());
+        var playerPos = new FlxPoint(herdedPlayer.getX(), herdedPlayer.getY());
         var dinoPos = new FlxPoint(getX(), getY());
-        var dist = leaderPos.distanceTo(dinoPos);
+        var distLeader = leaderPos.distanceTo(dinoPos);
+        var distPlayer = playerPos.distanceTo(dinoPos);
 
+        if (collidedWithDino > 4)
+        {
+            sprite.velocity.x += collisionVector.x / collidedWithDino * 0.1;
+            sprite.velocity.y += collisionVector.y / collidedWithDino * 0.1;
+        }
 
-        if (dist < FOLLOWING_RADIUS)
+        var playerVelocity = herdedPlayer.getSprite().velocity;
+        if (!herdedDisableFollowingRadius && GameWorld.magnitude(playerVelocity) < herdedSpeed / 10 && distPlayer < MAX_PLAYER_FOLLOWING_RADIUS * 2)
+        {
+            // If the player is not moving and we're nearby, stop moving as well.
+            // This is to prevent congestion around the player.
+            sprite.velocity.scale(DAMPING_FACTOR);
+            return;
+        }
+
+        if (GameWorld.checkVision(this, herdedPlayer) && !herdedDisableFollowingRadius && distPlayer >= MAX_PLAYER_FOLLOWING_RADIUS && framesStuck == 0)
+        {
+            // If we can see the player, move directly towards them.
+            moveTowards(playerPos, herdedSpeed);
+            return;
+        }
+
+        if (!herdedDisableFollowingRadius && distLeader < FOLLOWING_RADIUS)
         {
             // Slow dino down
             sprite.velocity.scale(DAMPING_FACTOR);
@@ -139,59 +178,89 @@ class Dino extends Entity
         }
 
         var positionDiff = new FlxPoint(lastPosition.x - dinoPos.x, lastPosition.y - dinoPos.y);
-        if (GameWorld.magnitude(positionDiff) < 4.0)
+        if (!GameWorld.checkVision(this, herdedLeader) || GameWorld.magnitude(positionDiff) < herdedSpeed/10)
         {
+            Console.log("Stuck.");
             framesStuck++;
         }
         else
         {
             framesStuck = 0;
         }
+
+        // Check if the leader is pathfinding. If they are, also begin pathfinding to get around obstacle.
+        var isLeaderPathfinding = false;
+        if (Std.is(herdedLeader.getType(), Dino) && cast(herdedLeader, Dino).getIsPathfinding())
+        {
+            isLeaderPathfinding = true;
+        }
         
-        if (framesStuck > 5 && (herdedPath.length == 0 || framesSincePathGenerated > 5))
+        // Check if we should be pathfinding right now.
+        // Begin pathfinding if leader is using pathfinding, or if we're stuck.
+        if ((isLeaderPathfinding || framesStuck > 5) && (herdedPath.length == 0 || framesSincePathGenerated > 5))
         {
             // Attempt to pathfind towards herded leader
+            Console.log("Finding new path.");
+            var offset = 24;
+            if (sprite.touching & FlxObject.LEFT > 0)
+                dinoPos.x += offset;
+            else if (sprite.touching & FlxObject.RIGHT > 0)
+                dinoPos.x -= offset;
+            else if (sprite.touching & FlxObject.UP > 0)
+                dinoPos.y += offset;
+            else if (sprite.touching & FlxObject.DOWN > 0)
+                dinoPos.y -= offset;
             var newPath = PlayState.world.getObstacles().findPath(leaderPos, dinoPos);
             if (newPath != null)
             {
                 herdedPath = newPath;
                 framesSincePathGenerated = 0;
-            }
+            } else Console.log("No path found.");
             framesStuck = 0;
         }
 
         if (herdedPath.length > 0)
         {
+            // We are currently pathfinding.
+            Console.log("Following path.");
+            isPathfinding = true;
             // Follow the path towards the leader
             var pathPoint = herdedPath[herdedPath.length-1];
             var dir = new FlxPoint(pathPoint.x - dinoPos.x, pathPoint.y - dinoPos.y);
-            if (GameWorld.magnitude(dir) < 4.0)
+            if (GameWorld.magnitude(dir) < 1.0)
             {
+                // We've reached this point; move to the next one.
                 herdedPath.pop();
+
+                // If the path is empty, return. There's nothing left to do.
                 if (herdedPath.length == 0) return;
                 pathPoint = herdedPath[herdedPath.length-1];
-                dir = new FlxPoint(pathPoint.x - dinoPos.x, pathPoint.y - dinoPos.y);
             }
 
-            var angle = Math.atan2(dir.y, dir.x);
-            sprite.velocity.set(Math.cos(angle) * herdedSpeed, Math.sin(angle) * herdedSpeed);
+            // Move towards the next point on the path.
+            moveTowards(pathPoint, herdedSpeed);
             framesSincePathGenerated++;
         }
         else
         {
+            // Moving based on line of sight; no pathfinding.
+            isPathfinding = false;
+
             // Move directly towards leader
-            if (herdedDisableFollowingRadius || dist > FOLLOWING_RADIUS)
-            {
-                var dir = new FlxPoint(leaderPos.x - dinoPos.x, leaderPos.y - dinoPos.y);
-                var angle = Math.atan2(dir.y, dir.x);
-                sprite.velocity.set(Math.cos(angle) * herdedSpeed, Math.sin(angle) * herdedSpeed);
-            }
+            moveTowards(leaderPos, herdedSpeed);
         }
 
-        if (dist > MAX_FOLLOWING_RADIUS)
+        if (distLeader > MAX_FOLLOWING_RADIUS)
         {
             setUnherded(true);
         }
+    }
+
+    function moveTowards(position:FlxPoint, speed:Float)
+    {
+        var dir = new FlxPoint(position.x - getX(), position.y - getY());
+        var angle = Math.atan2(dir.y, dir.x);
+        sprite.velocity.set(Math.cos(angle) * speed, Math.sin(angle) * speed);
     }
 
     /* State transition methods */
@@ -215,6 +284,19 @@ class Dino extends Entity
     public function getHerdedPlayer()
     {
         return herdedPlayer;
+    }
+
+    public function getIsPathfinding()
+    {
+        return isPathfinding;
+    }
+
+    function handleCollidedWithDino(dino:Dino)
+    {
+        if (dino.getState() == Herded)
+        {
+            collidedWithDino++;
+        }
     }
 
     function idle(elapsed:Float)
@@ -253,6 +335,21 @@ class Dino extends Entity
             var dir = new FlxPoint(this.sprite.x - entity.getSprite().x, this.sprite.y - entity.getSprite().y);
             var angle = Math.atan2(dir.y, dir.x);
             sprite.velocity.set(Math.cos(angle) * UNHERDED_SPEED, Math.sin(angle) * UNHERDED_SPEED);
+        }
+    }
+
+    public override function notifyHitboxCollision(hitbox:Hitbox, entity:Entity)
+    {
+        if (hitbox.getId() == HERDED_HITBOX_ID)
+        {
+            if (entity.type == EntityPrey || entity.type == EntityPredator)
+            {
+                var diffX = this.getX() - entity.getX();
+                var diffY = this.getY() - entity.getY();
+                collisionVector.x += diffX;
+                collisionVector.y += diffY;
+                collidedWithDino++;
+            }
         }
     }
 }

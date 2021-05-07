@@ -22,6 +22,9 @@ class Player extends Entity
     var cave:Cave;
     var inRangeOfCave:Bool = false;
 
+    var reorganizeCounter:Int = 0;
+    static final REORGANIZE_FRAMES = 20;
+
     public function new()
     {
         super();
@@ -50,10 +53,16 @@ class Player extends Entity
 
     public override function update(elapsed:Float)
     {
+        // Check player input and set movement vector.
         move();
+        
+        // Once every REORGANIZE_FRAMES, reorganize the herd.
+        if (reorganizeCounter % REORGANIZE_FRAMES == 0)
+        {
+            reorganizeHerd();
+        }
 
         // Cave depositing logic
-        reorganizeHerd();
 
         if (!inRangeOfCave && depositingToCave)
         {

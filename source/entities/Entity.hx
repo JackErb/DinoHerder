@@ -60,6 +60,13 @@ class Entity
         // Update our sprite
         sprite.update(elapsed);
 
+        for (hitbox in hitboxes)
+        {
+            hitbox.getSprite().x = getX();
+            hitbox.getSprite().y = getY();
+            hitbox.update(elapsed);
+        }
+
         // Delete all seen entities.
         // These will be refilled in during the following collision check cycle.
         seenEntities.resize(0);
@@ -81,10 +88,12 @@ class Entity
             case EntityPlayer:
                 handlePlayerCollision(cast entity);
             case EntityPrey:
+                handleDinoCollision(cast entity);
                 handlePreyCollision(cast entity);
             case EntityCave:
                 handleCaveCollision(cast entity);
             case EntityPredator:
+                handleDinoCollision(cast entity);
                 handlePredatorCollision(cast entity);
             case EntityBoulder:
                 handleBoulderCollision(cast entity);
@@ -98,6 +107,7 @@ class Entity
     public function handleCaveCollision(cave:Cave) {}
     public function handlePredatorCollision(predator:Predator) {}
     public function handleBoulderCollision(boulder:Boulder) {}
+    public function handleDinoCollision(dino:Dino) {}
 
     /* Setters & Getters */
     public function setPosition(x:Float, y:Float)

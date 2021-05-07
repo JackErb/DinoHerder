@@ -114,7 +114,7 @@ class GameWorld
         return GameWorld.entityDistance(from, to) < from.getNearbySightRadius();
     }
 
-    static function checkSightRange(from:Entity, to:Entity):Bool
+    public static function checkSightRange(from:Entity, to:Entity):Bool
     {
         var range = GameWorld.entityDistance(from, to);
 
